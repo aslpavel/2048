@@ -1,9 +1,9 @@
 module Main where
 
 import System.IO
+import Text.Printf (printf)
 import Control.Exception (bracket_)
 import System.Random (StdGen, randomR, getStdGen)
-import Prelude hiding (lookup)
 import Data.List (intercalate, transpose)
 import Control.Monad (foldM)
 import Control.Monad.State (State, evalState, modify, get)
@@ -14,7 +14,7 @@ newtype Board = Board { rows :: [[Maybe Int]] }
 
 instance Show Board where
     show = intercalate "\n" . map showLine . rows
-        where showLine = intercalate " " . map (maybe "." show)
+        where showLine = intercalate " " . map (maybe ".   " (printf "%-4d"))
 
 data GameState = GameState {
       gen :: StdGen,  -- game random seed
@@ -29,6 +29,12 @@ columns = transpose . rows
 
 mkBoard :: Int -> Int -> Board
 mkBoard h w = Board . replicate h . replicate w $ Nothing
+
+runGame :: StdGen -> [Board -> Game Board] -> [Board]
+runGame stdGen moves =
+    evalState (evalMoves initBoard moves) initState
+        where initBoard = testBoard
+              initState = GameState stdGen 0 0
 
 -- collapse row fro right to left
 collapseL :: [Maybe Int] -> Game [Maybe Int]
@@ -101,9 +107,9 @@ addValue game = do
       -- process all rows
       setRows v = mapM (mapM (setField v))
 
--- execute game based on specified moves
-exec :: Board -> [Board -> Game Board] -> Game [Board]
-exec board moves = (board:) <$> loop moves board
+-- eval moves on specified board
+evalMoves :: Board -> [Board -> Game Board] -> Game [Board]
+evalMoves board moves = (board:) <$> loop moves board
     where loop [] _ = return []
           loop (m:ms) g = do
             g' <- m g
@@ -144,8 +150,7 @@ main :: IO ()
 main = renderScope stdin $ do
   moves <- getMoves stdin
   stdGen <- getStdGen
-  mapM_ render $
-        evalState (exec testBoard moves) (GameState stdGen 0 0)
+  mapM_ render $ runGame stdGen moves
 
 -- testing board
 testBoard :: Board
