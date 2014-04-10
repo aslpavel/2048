@@ -17,9 +17,9 @@ instance Show Board where
         where showLine = intercalate " " . map (maybe "." show)
 
 data GameState = GameState {
-      gen :: StdGen,
-      points :: Int,
-      empty :: Int
+      gen :: StdGen,  -- game random seed
+      score :: Int,   -- game score
+      empty :: Int    -- empty counter or new value offset
     } deriving Show
 
 type Game a = State GameState a
@@ -39,15 +39,15 @@ collapseL fs = do
   return $ reverse fs' ++ replicate (e' - e) Nothing
       where
         -- might be better use lenses?
-        modEmpty f = modify $ \g -> g { empty = f . empty $ g }
-        modPoints f = modify $ \g -> g { points = f . points $ g }
+        modEmpty f = modify $ \s -> s { empty = f . empty $ s }
+        modScore f = modify $ \s -> s { score = f . score $ s }
         -- step through fields
         step xs Nothing = modEmpty (+1) >> return xs
         step [] f = return [f]
         step ms@(x:xs) f@(Just v) =
             if x == f
             then do
-              modPoints (+v*2)
+              modScore (+v*2)
               modEmpty (+1)
               return . (:xs) $ (*2) <$> x
             else return (f:ms)
@@ -69,34 +69,37 @@ moveD :: Board -> Game Board
 moveD = fmap (Board . transpose) . mapM collapseR . columns
 
 -- generate next random in (l, h)
-nextRandom :: (Int, Int) -> Game Int
-nextRandom r = do
+nextRandom :: Int -> Int -> Game Int
+nextRandom l h = do
   g <- gen <$> get
-  let (v, g') = randomR r g
-  modify $ \st -> st { gen = g' }
+  let (v, g') = randomR (l, h) g
+  modify $ \s -> s { gen = g' }
   return v
 
 -- add random field to the board
 addValue :: Game Board -> Game Board
 addValue game = do
-  -- get empty counter and reset it
-  e <- empty <$> get
-  modify $ \st -> st { empty = 0 }
-  f <- nextRandom (0, e + 1)       -- field index
-  v <- (*2) <$> nextRandom (1, 2)  -- value to be added
+  -- set empty to random value in (0, empty+1)
+  empty <$> get >>= nextRandom 0 . (+1) >>= modEmpty . const
+  v <- (*2) <$> nextRandom 1 2  -- value to be added (2|4)
   rs <- fmap rows game
-  return . Board $ evalState (setRows v rs) f
-    where setRows v = mapM (mapM (setField v))
-          -- set single field and decrease empty counter
-          setField :: Int -> (Maybe Int) -> State Int (Maybe Int)
-          setField v Nothing = do
-                 e <- get
-                 if e < 0
-                 then return Nothing
-                 else do modify (+(-1))
-                         return $ if e == 0 then Just v
-                                  else Nothing
-          setField _ f = return f
+  board <- Board <$> setRows v rs
+  modEmpty $ const 0            -- reset empty value to 0
+  return board
+    where
+      modEmpty f = modify $ \s -> s { empty = f . empty $ s }
+      -- set single field and decrease empty counter on empyt == 0
+      setField :: Int -> (Maybe Int) -> Game (Maybe Int)
+      setField v Nothing = do
+                  e <- empty <$> get
+                  if e < 0
+                  then return Nothing
+                  else do modEmpty (+(-1))
+                          return $ if e == 0 then Just v
+                                   else Nothing
+      setField _ f = return f
+      -- process all rows
+      setRows v = mapM (mapM (setField v))
 
 -- execute game based on specified moves
 exec :: Board -> [Board -> Game Board] -> Game [Board]
