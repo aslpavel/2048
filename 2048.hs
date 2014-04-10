@@ -30,7 +30,7 @@ columns = transpose . rows
 mkBoard :: Int -> Int -> Board
 mkBoard h w = Board . replicate h . replicate w $ Nothing
 
-runGame :: StdGen -> [Board -> Game Board] -> [Board]
+runGame :: StdGen -> [Board -> Game Board] -> [(GameState, Board)]
 runGame stdGen moves =
     evalState (evalMoves initBoard moves) initState
         where initBoard = testBoard
@@ -108,12 +108,14 @@ addValue game = do
       setRows v = mapM (mapM (setField v))
 
 -- eval moves on specified board
-evalMoves :: Board -> [Board -> Game Board] -> Game [Board]
-evalMoves board moves = (board:) <$> loop moves board
-    where loop [] _ = return []
-          loop (m:ms) g = do
-            g' <- m g
-            (g':) <$> loop ms g'
+evalMoves :: Board -> [Board -> Game Board] -> Game [(GameState, Board)]
+evalMoves board moves =
+    get >>= \s -> ((s,board):) <$> loop moves board
+        where loop [] _ = return []
+              loop (m:ms) b = do
+                s <- get
+                b' <- m b
+                ((s, b'):) <$> loop ms b'
 
 -- read moves from stdin
 getMoves :: Handle -> IO [Board -> Game Board]
@@ -141,9 +143,11 @@ renderScope handle = bracket_ before after
             hSetEcho handle True
             putStr "\ESC[?25h"  -- show cursor
 
-render :: Board -> IO ()
-render board = do
+render :: (GameState, Board) -> IO ()
+render (state, board) = do
   putStr "\ESC8"  -- restore cursor
+  printf "Score: %d\n" $ score state
+  printf "Empty (DEBUG): %d\n" $ empty state
   putStrLn . (++ "\n") . show $ board
 
 main :: IO ()
