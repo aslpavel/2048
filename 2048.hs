@@ -1,6 +1,5 @@
 module Main where
 
-import System.IO
 import Text.Printf (printf)
 import Control.Exception (bracket_)
 import System.Random (StdGen, randomR, getStdGen)
@@ -8,7 +7,8 @@ import Data.List (intercalate, transpose)
 import Control.Monad (foldM)
 import Control.Monad.State (State, evalState, modify, get)
 import Control.Applicative ((<$>))
-
+import System.IO (hSetEcho, hSetBuffering, hGetContents,
+                  stdin, Handle, BufferMode(..))
 
 newtype Board = Board { rows :: [[Maybe Int]] }
 
