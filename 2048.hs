@@ -28,12 +28,13 @@ columns :: Board -> [[Maybe Int]]
 columns = transpose . rows
 
 mkBoard :: Int -> Int -> Board
-mkBoard h w = Board . replicate h . replicate w $ Nothing
+mkBoard w h = Board . replicate h . replicate w $ Nothing
 
-runGame :: StdGen -> [Board -> Game Board] -> [(GameState, Board)]
-runGame stdGen moves =
-    evalState (evalMoves initBoard moves) initState
-        where initBoard = testBoard
+runGame :: StdGen -> Int -> Int -> [Board -> Game Board]
+        -> [(GameState, Board)]
+runGame stdGen w h moves =
+    evalState (evalMoves initBoard $ (addValue .) <$> moves) initState
+        where initBoard = mkBoard w h
               initState = GameState stdGen 0 0
 
 -- collapse row fro right to left
@@ -85,13 +86,13 @@ nextRandom l h = do
 -- add random field to the board
 addValue :: Game Board -> Game Board
 addValue game = do
+  board <- game
   -- set empty to random value in (0, empty+1)
-  empty <$> get >>= nextRandom 0 . (+1) >>= modEmpty . const
-  v <- (*2) <$> nextRandom 1 2  -- value to be added (2|4)
-  rs <- fmap rows game
-  board <- Board <$> setRows v rs
-  modEmpty $ const 0            -- reset empty value to 0
-  return board
+  empty <$> get >>= nextRandom 0 . (subtract 1) >>= modEmpty . const
+  value <- (*2) <$> nextRandom 1 2  -- value to be added (2|4)
+  board' <- Board <$> setRows value (rows board)
+  modEmpty $ const 0                -- reset empty value to 0
+  return board'
     where
       modEmpty f = modify $ \s -> s { empty = f . empty $ s }
       -- set single field and decrease empty counter on empyt == 0
@@ -100,7 +101,7 @@ addValue game = do
                   e <- empty <$> get
                   if e < 0
                   then return Nothing
-                  else do modEmpty (+(-1))
+                  else do modEmpty $ subtract 1
                           return $ if e == 0 then Just v
                                    else Nothing
       setField _ f = return f
@@ -147,14 +148,13 @@ render :: (GameState, Board) -> IO ()
 render (state, board) = do
   putStr "\ESC8"  -- restore cursor
   printf "Score: %d\n" $ score state
-  printf "Empty (DEBUG): %d\n" $ empty state
   putStrLn . (++ "\n") . show $ board
 
 main :: IO ()
 main = renderScope stdin $ do
   moves <- getMoves stdin
   stdGen <- getStdGen
-  mapM_ render $ runGame stdGen moves
+  mapM_ render $ runGame stdGen 4 4 moves
 
 -- testing board
 testBoard :: Board
