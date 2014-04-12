@@ -81,7 +81,7 @@ collapseL fs = do
             then do
               modifyScore (+v*2)
               modifyEmpty (+1)
-              when (v == 64) $ putFlag Won  -- game is won
+              when (v == 1024) $ putFlag Won  -- game is won
               return . (:xs) $ (*2) <$> x
             else return (f:ms)
 
@@ -167,7 +167,7 @@ evalMoves board moves =
                 if l then return [(s', b')]
                 else ((s', b'):) <$> loop ms b'
 
--- read moves from stdin
+-- read moves from handle
 getMoves :: Handle -> IO [Board -> Game Board]
 getMoves h = do
   hSetBuffering h NoBuffering
