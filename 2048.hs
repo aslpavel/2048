@@ -1,28 +1,21 @@
-module Main where
+module Main (main) where
 
 import Text.Printf (printf)
 import Control.Exception (bracket_)
 import System.Random (StdGen, randomR, getStdGen)
-import Data.List (intercalate, transpose)
-import Control.Monad (foldM)
+import Data.List (intercalate, transpose, delete)
+import Control.Monad (foldM, when)
 import Control.Monad.State (State, evalState, modify, get)
 import Control.Applicative ((<$>))
 import System.IO (hSetEcho, hSetBuffering, hGetContents,
                   stdin, Handle, BufferMode(..))
 
+-- board
 newtype Board = Board { rows :: [[Maybe Int]] }
 
 instance Show Board where
     show = intercalate "\n" . map showLine . rows
         where showLine = intercalate " " . map (maybe ".   " (printf "%-4d"))
-
-data GameState = GameState {
-      gen :: StdGen,  -- game random seed
-      score :: Int,   -- game score
-      empty :: Int    -- empty counter or new value offset
-    } deriving Show
-
-type Game a = State GameState a
 
 columns :: Board -> [[Maybe Int]]
 columns = transpose . rows
@@ -30,32 +23,65 @@ columns = transpose . rows
 mkBoard :: Int -> Int -> Board
 mkBoard w h = Board . replicate h . replicate w $ Nothing
 
+-- flags
+data GameFlag = Moved | Won | Lost deriving (Eq, Show)
+
+-- state
+data GameState = GameState {
+      gen :: StdGen,      -- game random seed
+      score :: Int,       -- game score
+      empty :: Int,       -- empty counter or new value offset
+      flags :: [GameFlag] -- game flags
+    } deriving Show
+
+-- whole game
+type Game a = State GameState a
+
+-- state modfiers
+modifyEmpty :: (Int -> Int) -> Game ()
+modifyEmpty f = modify $ \s -> s { empty = f . empty $ s }
+
+modifyScore :: (Int -> Int) -> Game ()
+modifyScore f = modify $ \s -> s { score = f . score $ s }
+
+takeFlag :: GameFlag -> Game Bool
+takeFlag f = do
+  p <- elem f . flags <$> get
+  when p $ modify $ \s -> s { flags = delete f $ flags s }
+  return p
+
+putFlag :: GameFlag -> Game ()
+putFlag f = do
+  p <- not . elem f . flags <$> get
+  when p $ modify $ \s -> s { flags = f : flags s }
+
+-- game runner
 runGame :: StdGen -> Int -> Int -> [Board -> Game Board]
         -> [(GameState, Board)]
-runGame stdGen w h moves =
-    evalState (evalMoves initBoard $ (addValue .) <$> moves) initState
-        where initBoard = mkBoard w h
-              initState = GameState stdGen 0 0
+runGame stdGen w h moves = evalState game initState
+    where initState = GameState stdGen 0 0 [Moved]
+          initBoard = mkBoard w h
+          game = evalMoves initBoard $ ((addValue . checkLost).) <$> moves
 
 -- collapse row fro right to left
 collapseL :: [Maybe Int] -> Game [Maybe Int]
 collapseL fs = do
   e <- empty <$> get
-  fs' <- foldM step [] fs
+  xs' <- foldM step [] fs
   e' <- empty <$> get
-  return $ reverse fs' ++ replicate (e' - e) Nothing
+  let fs' = reverse xs' ++ replicate (e' - e) Nothing
+  when (fs /= fs') $ putFlag Moved
+  return fs'
       where
-        -- might be better use lenses?
-        modEmpty f = modify $ \s -> s { empty = f . empty $ s }
-        modScore f = modify $ \s -> s { score = f . score $ s }
         -- step through fields
-        step xs Nothing = modEmpty (+1) >> return xs
+        step xs Nothing = modifyEmpty (+1) >> return xs
         step [] f = return [f]
         step ms@(x:xs) f@(Just v) =
             if x == f
             then do
-              modScore (+v*2)
-              modEmpty (+1)
+              modifyScore (+v*2)
+              modifyEmpty (+1)
+              when (v == 64) $ putFlag Won  -- game is won
               return . (:xs) $ (*2) <$> x
             else return (f:ms)
 
@@ -83,30 +109,51 @@ nextRandom l h = do
   modify $ \s -> s { gen = g' }
   return v
 
+-- set Lost flag if game is lost
+checkLost :: Game Board -> Game Board
+checkLost game = do
+  b <- game
+  e <- empty <$> get
+  if e /= 0 then return b
+  else do
+    -- try to move
+    moveL b
+    moveU b
+    m <- takeFlag Moved
+    if m then game -- restore state
+    else do
+      putFlag Lost
+      return b
+
 -- add random field to the board
 addValue :: Game Board -> Game Board
 addValue game = do
   board <- game
-  -- set empty to random value in (0, empty+1)
-  empty <$> get >>= nextRandom 0 . (subtract 1) >>= modEmpty . const
-  value <- (*2) <$> nextRandom 1 2  -- value to be added (2|4)
-  board' <- Board <$> setRows value (rows board)
-  modEmpty $ const 0                -- reset empty value to 0
-  return board'
-    where
-      modEmpty f = modify $ \s -> s { empty = f . empty $ s }
-      -- set single field and decrease empty counter on empyt == 0
-      setField :: Int -> (Maybe Int) -> Game (Maybe Int)
-      setField v Nothing = do
+  moved <- takeFlag Moved
+  if not moved  -- dont add anything if nothing is moved
+  then do
+    modifyEmpty $ const 0
+    return board
+  else do
+    -- set empty to random value in (0, empty-1)
+    empty <$> get >>= nextRandom 0 . (subtract 1) >>= modifyEmpty . const
+    value <- (*2) <$> nextRandom 1 2  -- value to be added (2|4)
+    board' <- Board <$> setRows value (rows board)
+    modifyEmpty $ const 0             -- reset empty value to 0
+    return board'
+        where
+          -- set single field and decrease empty counter on empyt == 0
+          setField :: Int -> (Maybe Int) -> Game (Maybe Int)
+          setField v Nothing = do
                   e <- empty <$> get
                   if e < 0
                   then return Nothing
-                  else do modEmpty $ subtract 1
+                  else do modifyEmpty $ subtract 1
                           return $ if e == 0 then Just v
                                    else Nothing
-      setField _ f = return f
-      -- process all rows
-      setRows v = mapM (mapM (setField v))
+          setField _ f = return f
+          -- process all rows
+          setRows v = mapM (mapM (setField v))
 
 -- eval moves on specified board
 evalMoves :: Board -> [Board -> Game Board] -> Game [(GameState, Board)]
@@ -114,9 +161,11 @@ evalMoves board moves =
     get >>= \s -> ((s,board):) <$> loop moves board
         where loop [] _ = return []
               loop (m:ms) b = do
-                s <- get
                 b' <- m b
-                ((s, b'):) <$> loop ms b'
+                s' <- get
+                l <- takeFlag Lost
+                if l then return [(s', b')]
+                else ((s', b'):) <$> loop ms b'
 
 -- read moves from stdin
 getMoves :: Handle -> IO [Board -> Game Board]
@@ -148,6 +197,7 @@ render :: (GameState, Board) -> IO ()
 render (state, board) = do
   putStr "\ESC8"  -- restore cursor
   printf "Score: %d\n" $ score state
+  putStrLn $ "Flags: " ++ intercalate " " (show <$> flags state)
   putStrLn . (++ "\n") . show $ board
 
 main :: IO ()
@@ -155,12 +205,4 @@ main = renderScope stdin $ do
   moves <- getMoves stdin
   stdGen <- getStdGen
   mapM_ render $ runGame stdGen 4 4 moves
-
--- testing board
-testBoard :: Board
-testBoard =
-    Board [[Just 2, Just 2, Nothing, Just 4, Just 2],
-           [Just 4, Nothing, Just 4, Nothing, Just 4],
-           [Just 8, Nothing, Nothing, Just 2, Just 2],
-           [Just 4, Nothing, Just 4, Just 2, Just 2]]
 
