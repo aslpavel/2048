@@ -15,7 +15,7 @@ newtype Board = Board { rows :: [[Maybe Int]] }
 
 instance Show Board where
     show = intercalate "\n" . map showLine . rows
-        where showLine = intercalate " " . map (maybe ".   " (printf "%-4d"))
+        where showLine = unwords . map (maybe ".   " (printf "%-4d"))
 
 columns :: Board -> [[Maybe Int]]
 columns = transpose . rows
@@ -52,7 +52,7 @@ takeFlag f = do
 
 putFlag :: GameFlag -> Game ()
 putFlag f = do
-  p <- not . elem f . flags <$> get
+  p <- notElem f . flags <$> get
   when p $ modify $ \s -> s { flags = f : flags s }
 
 -- game runner
@@ -136,14 +136,14 @@ addValue game = do
     return board
   else do
     -- set empty to random value in (0, empty-1)
-    empty <$> get >>= nextRandom 0 . (subtract 1) >>= modifyEmpty . const
+    empty <$> get >>= nextRandom 0 . subtract 1 >>= modifyEmpty . const
     value <- (*2) <$> nextRandom 1 2  -- value to be added (2|4)
     board' <- Board <$> setRows value (rows board)
     modifyEmpty $ const 0             -- reset empty value to 0
     return board'
         where
           -- set single field and decrease empty counter on empyt == 0
-          setField :: Int -> (Maybe Int) -> Game (Maybe Int)
+          setField :: Int -> Maybe Int -> Game (Maybe Int)
           setField v Nothing = do
                   e <- empty <$> get
                   if e < 0
@@ -171,8 +171,8 @@ evalMoves board moves =
 getMoves :: Handle -> IO [Board -> Game Board]
 getMoves h = do
   hSetBuffering h NoBuffering
-  fmap parse $ hGetContents h
-      where parse :: [Char] -> [Board -> Game Board]
+  parse <$> hGetContents h
+      where parse :: String -> [Board -> Game Board]
             parse [] = []
             parse ('q':_) = []
             parse ('\ESC':'[':x:xs)
@@ -197,7 +197,7 @@ render :: (GameState, Board) -> IO ()
 render (state, board) = do
   putStr "\ESC8"  -- restore cursor
   printf "Score: %d\n" $ score state
-  putStrLn $ "Flags: " ++ intercalate " " (show <$> flags state)
+  putStrLn $ "Flags: " ++ unwords (show <$> flags state)
   putStrLn . (++ "\n") . show $ board
 
 main :: IO ()
